@@ -66,7 +66,7 @@ This program is not suitable for mass production and commercialization as an exa
 Customers who puchase mass production and bulk should contact development@axden.io.
 <br>
 
-For mass-produced and mass-purchased customers, we will develop optimized Firmware for their purposes such as low power, stabilization, and communication with gateways for free.
+For B2B customers, we develop firmware optimized for customers' purposes, such as low power, stabilization, and communication with gateways, for free.
 <br>
 
 <table>
