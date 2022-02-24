@@ -63,7 +63,7 @@ It operates for 5 years using a battery.
 This program is not suitable for mass production and commercialization as an example program.
 <br>
 
-Customers who puchase mass production and bulk should contact development@axden.io.
+B2B customers should contact development@axden.io.
 <br>
 
 For B2B customers, we develop firmware optimized for customers' purposes, such as low power, stabilization, and communication with gateways, for free.
