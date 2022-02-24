@@ -15,7 +15,7 @@ This is an example provided to quickly test various service scenarios that requi
 Device can be purchased from the Naver Smart Store.
 <br>
 
-[네이버 스마트 스토어](https://smartstore.naver.com/axden)
+[Purchase Link : naver smart store](https://smartstore.naver.com/axden)
 <br>
 <br>
 
@@ -50,7 +50,6 @@ It can be turned on and off using Si7201 Hall sensor and magnet.
 The acceleration values are collected using the KXTJ3 sensor.
 <br>
 
-NTC 를 이용하여 온도 값을 수집합니다.
 The temperature value is collected using NTC.
 <br>
 
