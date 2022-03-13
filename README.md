@@ -70,6 +70,9 @@ Sensors can be used to collect AI learning data to classify animal motions such 
 We used the sensor as the EarTag of the cow. 
 <br>
 
+We have succeeded in learning Edge AI, which categorizes cow movements into rumination, feeding, rest, and high activities.
+<br>
+
 Based on the four motions classified using AI, we succeeded in detecting six conditions, including heat and disease.
 <br>
 
