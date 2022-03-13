@@ -58,16 +58,13 @@ It operates for 5 years using a battery.
 
 ----
 
-### AXDEN Aggregator output
-<br>
-
-Vector scale : 15.987f
+### Cow Ear tags detection heat and disease
 <br>
 
 Sensors can be used to collect AI learning data to classify animal motions such as cows and sheep.
 <br>
 
-We used the sensor as the EarTag of the cow. 
+We used the sensor as the Ear Tag of the cow. 
 <br>
 
 We have succeeded in learning Edge AI, which categorizes cow movements into rumination, feeding, rest, and high activities.
@@ -76,7 +73,13 @@ We have succeeded in learning Edge AI, which categorizes cow movements into rumi
 Based on the four motions classified using Edge AI, we succeeded in detecting six conditions, including heat and disease.
 <br>
 
+----
 
+### AXDEN Aggregator output
+<br>
+
+Vector scale : 15.987f
+<br>
 
 ```
 
