@@ -1,11 +1,11 @@
-# 3-Axis Bluetooth Motion Tracker
+# 3-Axis Bluetooth Livestock Motion Tracker
 
 <img src="./assets/ble_3_axis_motion_tracker.jpeg">
 <br>
 
 ----
 
-3-Axis Bluetooth Motion Tracker collects key information required for Motion Tracker such as acceleration and temperature and transmits it using Bluetooth communication.
+3-Axis Bluetooth Livestock Motion Tracker collects key information required for Motion Tracker such as acceleration and temperature and transmits it using Bluetooth communication.
 <br>
 This is an example provided to quickly test various service scenarios that require Android, iOS, and Gateway communication.
 <br>
@@ -61,8 +61,19 @@ It operates for 5 years using a battery.
 ### AXDEN Aggregator output
 <br>
 
-Vector value scale : 15.987f
+Vector scale : 15.987f
 <br>
+
+Sensors can be used to collect AI learning data to classify animal motions such as cows and sheep.
+<br>
+
+We used the sensor as the EarTag of the cow. 
+<br>
+
+Based on the four motions classified using AI, we succeeded in detecting six conditions, including heat and disease.
+<br>
+
+
 
 ```
 
