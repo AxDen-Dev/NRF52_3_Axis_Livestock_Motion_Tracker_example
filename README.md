@@ -73,7 +73,7 @@ We used the sensor as the EarTag of the cow.
 We have succeeded in learning Edge AI, which categorizes cow movements into rumination, feeding, rest, and high activities.
 <br>
 
-Based on the four motions classified using AI, we succeeded in detecting six conditions, including heat and disease.
+Based on the four motions classified using Edge AI, we succeeded in detecting six conditions, including heat and disease.
 <br>
 
 
