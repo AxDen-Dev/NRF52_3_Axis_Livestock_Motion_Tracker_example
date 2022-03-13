@@ -29,7 +29,7 @@ MCU | Description
 :-------------------------:|:-------------------------:
 NRF52811 | Bluetooth SoC
 
-센서 | Description
+Sensor | Description
 :-------------------------:|:-------------------------:
 KXTJ3 | 3 Axis Accelerometer
 Si7201 | Hall Sensor
