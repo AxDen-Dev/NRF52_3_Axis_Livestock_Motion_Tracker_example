@@ -97,6 +97,8 @@
 
 #define TWI_TIMEOUT_COUNT 10
 
+#define PAYLOAD_BUFFER_SIZE 3
+
 #define KXTJ3_ADDRESS 0x0E
 #define SCALE_VALUE 15.987f
 
@@ -122,10 +124,28 @@ const nrf_drv_twi_t m_twi = NRF_DRV_TWI_INSTANCE(0);
 static nrf_saadc_value_t m_buffer_pool_low_power[2][SAADC_SAMPLES_IN_BUFFER];
 static volatile uint8_t m_saadc_initialized = 0x00;
 
+static volatile uint8_t one_sec_timer_update = 0x00;
 static volatile uint8_t app_timer_update = 0x00;
 
-static int16_t temperature = 0;
+static int8_t temperature = 0;
 static uint8_t battery_value = 0x00;
+
+static packet_header_0_t packet_header_0;
+static packet_header_1_t packet_header_1;
+static packet_event_0_t packet_event_0;
+static packet_event_1_t packet_event_1;
+static product_id_t product_id;
+
+static volatile uint8_t packet_id = 0;
+static volatile uint8_t command_id = 0;
+static volatile uint8_t node_packet_data_size;
+static node_packet_data_t node_packet_data;
+
+static uint8_t vector_data_index = 0;
+static uint8_t vector_data[200] = { 0x00 };
+
+static uint8_t payload_buffer_index = 0;
+static payload_t payload_buffer[PAYLOAD_BUFFER_SIZE];
 
 static volatile uint8_t on_off_state = 0x01;
 
@@ -137,16 +157,6 @@ static volatile uint8_t request_disconnect = 0x00;
 static volatile uint8_t data_update_state = 0x00;
 
 static uint8_t mac_address[8] = { 0x00 };
-
-static uint8_t payload_size = 0;
-static uint8_t payload[213];
-
-static uint8_t radio_packet_protocol_size = 0;
-static radio_packet_protocol_t radio_packet_protocol;
-
-static uint32_t collection_cycle_timeout_count = 0;
-static uint32_t collection_cycle_timer_count = COLLECTION_CYCLE_TIMEOUT;
-static volatile uint8_t collection_cycle_update = 0x00;
 
 /**@brief Struct that contains pointers to the encoded advertising data. */
 static ble_gap_adv_data_t m_adv_data = { .adv_data = { .p_data = m_enc_advdata,
@@ -179,30 +189,12 @@ static void app_time_timeout_handler(void *p_context) {
 	static uint8_t one_sec_timer_count = 0;
 	UNUSED_PARAMETER(p_context);
 
-	if (on_off_state) {
+	one_sec_timer_count += 1;
 
-		one_sec_timer_count += 1;
+	if (one_sec_timer_count > 10) {
 
-		if (one_sec_timer_count > 10) {
-
-			collection_cycle_timeout_count += 1;
-
-			if (collection_cycle_timeout_count
-					>= collection_cycle_timer_count) {
-
-				collection_cycle_update = 0x01;
-				collection_cycle_timeout_count = 0;
-
-			}
-
-			one_sec_timer_count = 0;
-
-		}
-
-	} else {
-
+		one_sec_timer_update = 0x01;
 		one_sec_timer_count = 0;
-		collection_cycle_timeout_count = 0;
 
 	}
 
@@ -344,15 +336,7 @@ static void nrf_qwr_error_handler(uint32_t nrf_error) {
 static void ble_service_tx_complete_handler(uint16_t conn_handle,
 		ble_service_t *p_service) {
 
-	if (aggregator_notify_enable_state) {
-
-		tx_complete_state = 0x02;
-
-	} else if (stream_notify_enable_state) {
-
-		tx_complete_state = 0x01;
-
-	}
+	tx_complete_state = 0x02;
 
 	NRF_LOG_INFO("TX complete %d", tx_complete_state);
 
@@ -383,30 +367,6 @@ static void ble_service_notify_state_event_handler(uint16_t conn_handle,
 static void ble_service_write_handler(uint16_t conn_handle,
 		ble_service_t *p_service, uint8_t event_type, uint8_t const *buffer,
 		uint8_t buffer_size) {
-
-	if (buffer_size == 5) {
-
-		uint8_t control_number = buffer[0];
-
-		if (radio_packet_protocol.Packet.control_number != control_number) {
-
-			uint32_t collection_cycle = buffer[1] << 24;
-			collection_cycle |= buffer[2] << 16;
-			collection_cycle |= buffer[3] << 8;
-			collection_cycle |= buffer[4];
-
-			if (collection_cycle >= COLLECTION_CYCLE_TIMEOUT) {
-
-				collection_cycle_timeout_count = 0;
-				collection_cycle_timer_count = collection_cycle;
-
-				radio_packet_protocol.Packet.control_number = control_number;
-
-			}
-
-		}
-
-	}
 
 }
 
@@ -672,22 +632,6 @@ static void wait_200ms() {
 
 }
 
-static void get_mac_address() {
-
-	uint32_t err_code;
-	ble_gap_addr_t addr;
-
-	err_code = sd_ble_gap_addr_get(&addr);
-	APP_ERROR_CHECK(err_code);
-
-	for (uint8_t i = 0; i < 6; i++) {
-
-		mac_address[5 - i] = addr.addr[i];
-
-	}
-
-}
-
 static void saadc_callback(nrf_drv_saadc_evt_t const *p_event) {
 
 	if (p_event->type == NRF_DRV_SAADC_EVT_DONE) {
@@ -803,39 +747,39 @@ void read_battery_level_temperature(void) {
 
 }
 
-static void twi_scan(void) {
-
-	NRF_LOG_INFO("I2C Scan started.");
-	NRF_LOG_FLUSH();
-
-	for (uint16_t i = 0; i < 127; i++) {
-
-		uint8_t reg = 0x01;
-		uint8_t twi_timeout = 5;
-
-		twi_write_done = 0x00;
-		twi_read_done = 0x00;
-		twi_address_nack = 0x00;
-
-		nrf_drv_twi_tx(&m_twi, i, &reg, 1, false);
-
-		while (!twi_write_done && --twi_timeout) {
-
-			idle_state_handle();
-
-		}
-
-		if (!twi_address_nack) {
-
-			NRF_LOG_INFO("FIND %02X", i);
-
-		}
-
-		NRF_LOG_FLUSH();
-
-	}
-
-}
+//static void twi_scan(void) {
+//
+//	NRF_LOG_INFO("I2C Scan started.");
+//	NRF_LOG_FLUSH();
+//
+//	for (uint16_t i = 0; i < 127; i++) {
+//
+//		uint8_t reg = 0x01;
+//		uint8_t twi_timeout = 5;
+//
+//		twi_write_done = 0x00;
+//		twi_read_done = 0x00;
+//		twi_address_nack = 0x00;
+//
+//		nrf_drv_twi_tx(&m_twi, i, &reg, 1, false);
+//
+//		while (!twi_write_done && --twi_timeout) {
+//
+//			idle_state_handle();
+//
+//		}
+//
+//		if (!twi_address_nack) {
+//
+//			NRF_LOG_INFO("FIND %02X", i);
+//
+//		}
+//
+//		NRF_LOG_FLUSH();
+//
+//	}
+//
+//}
 
 static void twi_handler(nrf_drv_twi_evt_t const *p_event, void *p_context) {
 
@@ -878,8 +822,9 @@ static void twi_init(void) {
 
 }
 
-static void kxtj3_init() {
+static uint8_t kxtj3_init() {
 
+	uint8_t i2c_state = 0x01;
 	uint8_t twi_timeout = 0;
 
 	uint8_t reg[2];
@@ -897,6 +842,16 @@ static void kxtj3_init() {
 	while (!twi_write_done && --twi_timeout) {
 
 		idle_state_handle();
+
+	}
+
+	if (!twi_timeout || twi_address_nack) {
+
+		i2c_state = i2c_state & 0x00;
+
+	} else {
+
+		i2c_state = i2c_state & 0x01;
 
 	}
 
@@ -922,6 +877,16 @@ static void kxtj3_init() {
 
 	}
 
+	if (!twi_timeout || twi_address_nack) {
+
+		i2c_state = i2c_state & 0x00;
+
+	} else {
+
+		i2c_state = i2c_state & 0x01;
+
+	}
+
 	//Wait 300ms
 	for (uint8_t i = 0; i < 3; i++) {
 
@@ -944,6 +909,16 @@ static void kxtj3_init() {
 
 	}
 
+	if (!twi_timeout || twi_address_nack) {
+
+		i2c_state = i2c_state & 0x00;
+
+	} else {
+
+		i2c_state = i2c_state & 0x01;
+
+	}
+
 	reg[0] = 0x1F;
 	reg[1] = 0x00;
 
@@ -956,6 +931,16 @@ static void kxtj3_init() {
 	while (!twi_write_done && --twi_timeout) {
 
 		idle_state_handle();
+
+	}
+
+	if (!twi_timeout || twi_address_nack) {
+
+		i2c_state = i2c_state & 0x00;
+
+	} else {
+
+		i2c_state = i2c_state & 0x01;
 
 	}
 
@@ -974,10 +959,23 @@ static void kxtj3_init() {
 
 	}
 
+	if (!twi_timeout || twi_address_nack) {
+
+		i2c_state = i2c_state & 0x00;
+
+	} else {
+
+		i2c_state = i2c_state & 0x01;
+
+	}
+
+	return i2c_state;
+
 }
 
-static uint16_t get_kxtj3_vector(int16_t *ax, int16_t *ay, int16_t *az) {
+static uint8_t get_kxtj3_vector(uint8_t *output_vector) {
 
+	uint8_t i2c_state = 0x01;
 	uint8_t twi_timeout = 0;
 
 	uint8_t reg = 0x06;
@@ -995,6 +993,16 @@ static uint16_t get_kxtj3_vector(int16_t *ax, int16_t *ay, int16_t *az) {
 
 	}
 
+	if (!twi_timeout || twi_address_nack) {
+
+		i2c_state = i2c_state & 0x00;
+
+	} else {
+
+		i2c_state = i2c_state & 0x01;
+
+	}
+
 	twi_timeout = TWI_TIMEOUT_COUNT;
 	twi_read_done = 0x00;
 	twi_address_nack = 0x00;
@@ -1007,25 +1015,46 @@ static uint16_t get_kxtj3_vector(int16_t *ax, int16_t *ay, int16_t *az) {
 
 	}
 
-	int8_t value = buffer[1];
-	*ax = value * SCALE_VALUE;
+	if (!twi_timeout || twi_address_nack) {
 
-	value = buffer[3];
-	*ay = value * SCALE_VALUE;
+		i2c_state = i2c_state & 0x00;
 
-	value = buffer[5];
-	*az = value * SCALE_VALUE;
+	} else {
 
-	NRF_LOG_INFO("AX %d, AY %d, AZ %d", *ax, *ay, *az);
+		i2c_state = i2c_state & 0x01;
 
-	float vector = powf(*ax, 2);
-	vector += powf(*ay, 2);
-	vector += powf(*az, 2);
+	}
+
+//	int8_t value = buffer[1];
+//	int16_t ax = value * SCALE_VALUE;
+//
+//	value = buffer[3];
+//	int16_t ay = value * SCALE_VALUE;
+//
+//	value = buffer[5];
+//	int16_t az = value * SCALE_VALUE;
+
+	int8_t ax = buffer[1];
+	int8_t ay = buffer[3];
+	int8_t az = buffer[5];
+
+	float vector = powf(ax, 2);
+	vector += powf(ay, 2);
+	vector += powf(az, 2);
 	vector = sqrtf(vector);
+	vector = roundf(vector);
 
-	uint16_t output_vector = (uint16_t) roundf(vector);
+	if (vector > UINT8_MAX) {
 
-	return output_vector;
+		vector = UINT8_MAX;
+
+	}
+
+	*output_vector = vector;
+
+	//NRF_LOG_INFO("Vector %d / %d", vector, i2c_state);
+
+	return i2c_state;
 
 }
 
@@ -1035,12 +1064,64 @@ static void gpio_init() {
 	nrf_gpio_pin_clear(NTC_VCC_GPIO);
 
 	nrf_gpio_cfg_output(LED_RED_GPIO);
-	nrf_gpio_pin_clear(LED_RED_GPIO);
+	nrf_gpio_pin_set(LED_RED_GPIO);
 
 	nrf_gpio_cfg_output(LED_BLUE_GPIO);
-	nrf_gpio_pin_clear(LED_BLUE_GPIO);
+	nrf_gpio_pin_set(LED_BLUE_GPIO);
 
 	nrf_gpio_cfg_input(HALL_INPUT_GPIO, NRF_GPIO_PIN_NOPULL);
+
+}
+
+static void build_event_packet(uint8_t event_type) {
+
+	packet_header_0.bits.PACKET_TYPE = PACKET_TYPE_UPLINK_EVENT_HEADER_0;
+
+	node_packet_data.Event_Packet.header_0 = packet_header_0.value;
+	node_packet_data.Event_Packet.header_1 = packet_header_1.value;
+
+	memcpy(node_packet_data.Event_Packet.mac_address, mac_address,
+			sizeof(mac_address));
+
+	node_packet_data.Event_Packet.product_id[0] = product_id.value >> 8;
+	node_packet_data.Event_Packet.product_id[1] = product_id.value;
+
+	packet_event_0.bits.EVENT_TYPE = event_type;
+	node_packet_data.Event_Packet.event_value_0 = packet_event_0.value;
+	node_packet_data.Event_Packet.event_value_1 = packet_event_1.value;
+
+	node_packet_data_size = NODE_EVENT_PACKET_SIZE;
+
+	NRF_LOG_INFO("build_event_packet");
+
+}
+
+static void build_sensor_data_packet(uint8_t sensor_data_packet_index) {
+
+	packet_header_0.bits.PACKET_TYPE = PACKET_TYPE_UPLINK_SENSOR_DATA_HEADER_0;
+
+	node_packet_data.Data_Packet.header_0 = packet_header_0.value;
+	node_packet_data.Data_Packet.header_1 = packet_header_1.value;
+
+	memcpy(node_packet_data.Data_Packet.mac_address, mac_address,
+			sizeof(mac_address));
+
+	node_packet_data.Data_Packet.packet_info =
+			payload_buffer[sensor_data_packet_index].packet_info;
+
+	node_packet_data.Data_Packet.battery_value =
+			payload_buffer[sensor_data_packet_index].battery_value;
+
+	node_packet_data.Data_Packet.temperature =
+			payload_buffer[sensor_data_packet_index].temperature;
+
+	memcpy(node_packet_data.Data_Packet.vector,
+			payload_buffer[sensor_data_packet_index].vector,
+			sizeof(node_packet_data.Data_Packet.vector));
+
+	node_packet_data_size = NODE_DATA_PACKET_SIZE;
+
+	NRF_LOG_INFO("build_sensor_data_packet");
 
 }
 
@@ -1048,14 +1129,14 @@ static void gpio_init() {
  */
 int main(void) {
 
-	int16_t ax = 0;
-	int16_t ay = 0;
-	int16_t az = 0;
+	uint8_t event_init = 0x00;
+	uint8_t event_type = EVENT_TYPE_POWER_ON;
 
-	int16_t max_ax = 0;
-	int16_t max_ay = 0;
-	int16_t max_az = 0;
-	uint32_t vector_max = 0;
+	uint8_t event_data_state = 0x00;
+	uint8_t event_packet_ready = 0x00;
+
+	uint8_t sensor_data_packet_index = 0;
+	uint8_t sensor_data_packet_ready = 0x00;
 
 	uint16_t on_off_count = 0;
 
@@ -1102,15 +1183,36 @@ int main(void) {
 
 	conn_params_init();
 
-	advertising_start();
-
 	app_timer_start(m_app_timer_id, APP_TIMER_DELAY, NULL);
 
-	get_mac_address();
+	/////////////////////// Init Protocol Data /////////////////////
+	packet_header_0.value = 0x00;
+	packet_header_0.bits.DEVICE_ROLE = 0x00;
+	packet_header_0.bits.PACKET_TYPE = PACKET_TYPE_UPLINK_EVENT_HEADER_0;
+	packet_header_0.bits.CHIP_MANUFACTURER = CHIP_MANUFACTURER_NORDIC;
 
-	twi_scan();
+	packet_header_1.value = 0x00;
+	packet_header_1.bits.CHIP_IDENTIFIER = CHIP_IDENTIFIER_NRF52811;
+	packet_header_1.bits.COMMUNICATION_TYPE =
+	COMMUNICATION_TYPE_BLE_CONNECTION_1M;
 
-	kxtj3_init();
+	product_id.value = 0x00;
+	product_id.bits.PRODUCT_ID = PRODUCT_ID_AD_PS_04;
+	product_id.bits.DEVICE_TYPE = 0x00;
+	product_id.bits.PRODUCT_TYPE = 0x01;
+
+	packet_event_0.value = 0x00;
+	packet_event_0.bits.EVENT_TYPE = EVENT_TYPE_POWER_ON;
+
+	packet_event_1.value = 0x00;
+
+	//////////////////// Start Application ///////////////////
+
+	if (!kxtj3_init()) {
+
+		packet_event_1.bits.KXJ3_ERROR = 0x01;
+
+	}
 
 	nrf_gpio_pin_set(NTC_VCC_GPIO);
 
@@ -1118,151 +1220,230 @@ int main(void) {
 
 	read_battery_level_temperature();
 
+	wait_200ms();
+
 	nrf_gpio_pin_clear(NTC_VCC_GPIO);
 
-	nrf_gpio_pin_clear(LED_RED_GPIO);
-	nrf_gpio_pin_clear(LED_BLUE_GPIO);
+	nrf_gpio_pin_set(LED_RED_GPIO);
+	nrf_gpio_pin_set(LED_BLUE_GPIO);
+
+	/////////////////////// Print MAC Address ////////////////////
+
+	uint8_t print_mac_index = 0;
+	uint8_t print_mac_buffer[32] = { 0x00 };
+
+	for (uint8_t i = 0; i < 8; i++) {
+
+		print_mac_index += sprintf((char*) print_mac_buffer + print_mac_index,
+				"%02X", mac_address[i]);
+
+	}
+
+	NRF_LOG_INFO("MAC : %s", print_mac_buffer);
+
+	//////////////// Start Main Loop ////////////////////
+
+	event_packet_ready = 0x01;
+	data_update_state = 0x01;
+	advertising_init(data_update_state);
+
+	advertising_start();
 
 	NRF_LOG_INFO("Start main loop");
 
-	radio_packet_protocol.Packet.company_id[0] = COMPANY_ID >> 8;
-	radio_packet_protocol.Packet.company_id[1] = COMPANY_ID;
-
-	radio_packet_protocol.Packet.device_id[0] = DEVICE_TYPE >> 8;
-	radio_packet_protocol.Packet.device_id[1] = DEVICE_TYPE;
-
-	memcpy(radio_packet_protocol.Packet.mac_address, mac_address, 8);
-
-	radio_packet_protocol.Packet.control_number = 0;
-
 	for (;;) {
 
-		if (!nrf_gpio_pin_read(HALL_INPUT_GPIO)) {
+		if (one_sec_timer_update) {
 
-			if (on_off_state) {
-
-				nrf_gpio_pin_clear(LED_RED_GPIO);
-				nrf_gpio_pin_set(LED_BLUE_GPIO);
-
-				on_off_count++;
-
-			} else {
-
-				nrf_gpio_pin_set(LED_RED_GPIO);
-				nrf_gpio_pin_clear(LED_BLUE_GPIO);
-
-				on_off_count++;
-
-			}
-
-			if (on_off_count > 10) {
+			if (!nrf_gpio_pin_read(HALL_INPUT_GPIO)) {
 
 				if (on_off_state) {
 
-					data_update_state = 0x00;
+					nrf_gpio_pin_clear(LED_RED_GPIO);
+					nrf_gpio_pin_set(LED_BLUE_GPIO);
 
-					adversting_stop();
+				} else {
 
-					gap_params_init();
-
-					advertising_init(data_update_state);
-
-					advertising_start();
-
-					nrf_gpio_pin_clear(NTC_VCC_GPIO);
+					nrf_gpio_pin_set(LED_RED_GPIO);
+					nrf_gpio_pin_clear(LED_BLUE_GPIO);
 
 				}
 
-				temperature_read_step = 0x00;
+				on_off_count += 1;
 
-				vector_max = 0;
+				if (on_off_count >= 3) {
 
-				nrf_gpio_pin_clear(LED_RED_GPIO);
-				nrf_gpio_pin_clear(LED_BLUE_GPIO);
+					//1Sec LED Indicate
+					nrf_gpio_pin_clear(LED_RED_GPIO);
+					nrf_gpio_pin_clear(LED_BLUE_GPIO);
 
-				for (uint8_t i = 0; i < 10; i++) {
+					for (uint8_t i = 0; i < 10; i++) {
 
-					while (!app_timer_update) {
+						while (!app_timer_update) {
 
-						idle_state_handle();
+							idle_state_handle();
+
+						}
+
+						app_timer_update = 0x00;
 
 					}
 
-					app_timer_update = 0x00;
+					nrf_gpio_pin_set(LED_RED_GPIO);
+					nrf_gpio_pin_set(LED_BLUE_GPIO);
+
+					//On Off event process
+					if (on_off_state) {
+
+						event_type = EVENT_TYPE_POWER_OFF;
+
+						NRF_LOG_INFO("EVENT_TYPE_POWER_OFF");
+
+					} else {
+
+						event_type = EVENT_TYPE_POWER_ON;
+
+						NRF_LOG_INFO("EVENT_TYPE_POWER_ON");
+
+					}
+
+					vector_data_index = 0;
+					payload_buffer_index = 0;
+					sensor_data_packet_index = 0;
+
+					temperature_read_step = 0x00;
+					nrf_gpio_pin_clear(NTC_VCC_GPIO);
+
+					event_init = 0x00;
+					event_packet_ready = 0x01;
+					data_update_state = 0x01;
+
+					if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
+
+						adversting_stop();
+						gap_params_init();
+						advertising_init(data_update_state);
+						advertising_start();
+
+					} else {
+
+						sd_ble_gap_disconnect(m_conn_handle,
+						BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+
+					}
+
+					on_off_state = !on_off_state;
+					on_off_count = 0;
+
+					NRF_LOG_INFO("on_off_state %d", on_off_state);
 
 				}
+
+			} else {
+
+				on_off_count = 0;
 
 				nrf_gpio_pin_set(LED_RED_GPIO);
 				nrf_gpio_pin_set(LED_BLUE_GPIO);
 
-				on_off_state = !on_off_state;
-
-				on_off_count = 0;
-
 			}
 
-		} else {
-
-			nrf_gpio_pin_set(LED_RED_GPIO);
-			nrf_gpio_pin_set(LED_BLUE_GPIO);
-
-			on_off_count = 0;
+			one_sec_timer_update = 0x00;
 
 		}
 
-		if (on_off_state) {
+		if (on_off_state && event_init) {
 
-			uint32_t vector = get_kxtj3_vector(&ax, &ay, &az);
+			uint8_t output_vector = 0;
 
-			if (vector > vector_max) {
+			if (!get_kxtj3_vector(&output_vector)) {
 
-				max_ax = ax;
-				max_ay = ay;
-				max_az = az;
-				vector_max = vector;
+				packet_event_1.bits.KXJ3_ERROR = 0x01;
+				event_data_state = 0x01;
 
 			}
 
-			if (collection_cycle_update) {
+			vector_data[vector_data_index++] = output_vector;
 
-				if (temperature_read_step == 0x00) {
+			if (vector_data_index + 10 == sizeof(vector_data)) {
 
-					nrf_gpio_pin_set(NTC_VCC_GPIO);
+				nrf_gpio_pin_set(NTC_VCC_GPIO);
 
-					temperature_read_step = 0x01;
+				temperature_read_step = 0x01;
 
-				} else {
+				NRF_LOG_INFO("Start Read Battery Level");
+
+			} else {
+
+				if (temperature_read_step == 0x01) {
 
 					read_battery_level_temperature();
 
+					temperature_read_step = 0x02;
+
+				} else if (temperature_read_step == 0x02) {
+
 					nrf_gpio_pin_clear(NTC_VCC_GPIO);
 
-					payload_size = 0;
-					memset(payload, 0x00, sizeof(payload));
+					if (m_saadc_initialized == 0x01) {
 
-					payload_size = sprintf((char*) payload, "%d.%d,",
-							(battery_value / 10), (battery_value % 10));
+						packet_event_1.bits.SAADC_ERROR = 0x01;
+						event_data_state = 0x01;
 
-					payload_size += sprintf((char*) payload + payload_size,
-							"%d.%d,", (temperature / 10),
-							abs(temperature % 10));
+						NRF_LOG_INFO("SAADC ERROR");
 
-					payload_size += sprintf((char*) payload + payload_size,
-							"%d,", max_ax);
-
-					payload_size += sprintf((char*) payload + payload_size,
-							"%d,", max_ay);
-
-					payload_size += sprintf((char*) payload + payload_size,
-							"%d", max_az);
-
-					radio_packet_protocol_size = PACKET_HEADER_SIZE;
-					radio_packet_protocol_size += payload_size;
-					memcpy(radio_packet_protocol.Packet.payload, payload,
-							payload_size);
+					}
 
 					temperature_read_step = 0x00;
-					collection_cycle_update = 0x00;
+
+				}
+
+			}
+
+			if (vector_data_index >= sizeof(vector_data)) {
+
+				payload_buffer[payload_buffer_index].packet_info = (command_id
+						<< 4) & 0xF0;
+				payload_buffer[payload_buffer_index].packet_info |= (packet_id
+						& 0x0F);
+
+				payload_buffer[payload_buffer_index].battery_value =
+						battery_value;
+
+				payload_buffer[payload_buffer_index].temperature = temperature;
+
+				memcpy(payload_buffer[payload_buffer_index].vector, vector_data,
+						sizeof(vector_data));
+				payload_buffer_index += 1;
+
+				if (event_data_state) {
+
+					event_type = EVENT_TYPE_RUN_TIME_EVENT;
+					event_packet_ready = 0x01;
+
+				}
+
+				event_data_state = 0x00;
+
+				//Pakcet ID Update
+				packet_id += 1;
+
+				if (packet_id > 0x0F) {
+
+					packet_id = 0;
+
+				}
+
+				vector_data_index = 0;
+
+				if (payload_buffer_index >= PAYLOAD_BUFFER_SIZE) {
+
+					sensor_data_packet_index = 0;
+					sensor_data_packet_ready = 0x01;
+
+					data_update_state = 0x01;
+
+					payload_buffer_index = 0;
 
 					if (m_conn_handle == BLE_CONN_HANDLE_INVALID) {
 
@@ -1276,89 +1457,116 @@ int main(void) {
 
 					}
 
-					vector_max = 0;
-
-					data_update_state = 0x01;
-
-					NRF_LOG_INFO("Data Update");
-
 				}
 
 			}
 
-			if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
+		}
 
-				if (aggregator_notify_enable_state) {
+		if (m_conn_handle != BLE_CONN_HANDLE_INVALID) {
 
-					if (data_update_state) {
+			if (aggregator_notify_enable_state || stream_notify_enable_state) {
 
-						if (tx_complete_state == 0x01) {
+				if (event_packet_ready || sensor_data_packet_ready) {
 
-							tx_complete_state = 0x00;
+					if (tx_complete_state == 0x01) {
 
-							ble_service_send_aggregator_notification(
-									m_conn_handle, &m_service,
-									radio_packet_protocol.buffer,
-									radio_packet_protocol_size);
+						tx_complete_state = 0x00;
 
-							data_update_state = 0x00;
+						if (event_packet_ready == 0x01) {
 
-							NRF_LOG_INFO("Aggregator notify send");
+							build_event_packet(event_type);
 
-						} else if (tx_complete_state == 0x02) {
+						} else if (sensor_data_packet_ready == 0x01) {
 
-							disconnect_timeout_count = DISCONNECT_TIMEOUT;
+							build_sensor_data_packet(sensor_data_packet_index);
 
 						}
 
-					}
+						if (aggregator_notify_enable_state) {
 
-				} else if (stream_notify_enable_state) {
+							ble_service_send_aggregator_notification(
+									m_conn_handle, &m_service,
+									node_packet_data.buffer,
+									node_packet_data_size);
 
-					if (data_update_state) {
+							NRF_LOG_INFO("Gateway notify send");
 
-						if (tx_complete_state) {
-
-							tx_complete_state = 0x00;
+						} else if (stream_notify_enable_state) {
 
 							ble_service_send_stream_notification(m_conn_handle,
-									&m_service, radio_packet_protocol.buffer,
-									radio_packet_protocol_size);
-
-							data_update_state = 0x00;
+									&m_service, node_packet_data.buffer,
+									node_packet_data_size);
 
 							NRF_LOG_INFO("Stream notify send");
 
 						}
 
+					} else if (tx_complete_state == 0x02) {
+
+						if (event_packet_ready == 0x01) {
+
+							packet_event_1.value = 0x00;
+							event_packet_ready = 0x00;
+
+						} else if (sensor_data_packet_ready == 0x01) {
+
+							sensor_data_packet_index += 1;
+
+							if (sensor_data_packet_index >= PAYLOAD_BUFFER_SIZE) {
+
+								sensor_data_packet_index = 0;
+								sensor_data_packet_ready = 0x00;
+
+							}
+
+						}
+
+						if (!event_packet_ready && !sensor_data_packet_ready) {
+
+							data_update_state = 0x00;
+							disconnect_timeout_count = DISCONNECT_TIMEOUT;
+
+						} else {
+
+							tx_complete_state = 0x01;
+
+						}
+
+						event_init = 0x01;
+
 					}
+
+				}
+
+				if (stream_notify_enable_state) {
 
 					disconnect_timeout_count = 0;
 
 				}
 
-				disconnect_timeout_count++;
+			}
 
-				if (disconnect_timeout_count > DISCONNECT_TIMEOUT) {
+			disconnect_timeout_count++;
 
-					if (request_disconnect == 0x00) {
+			if (disconnect_timeout_count > DISCONNECT_TIMEOUT) {
 
-						sd_ble_gap_disconnect(m_conn_handle,
-						BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+				if (request_disconnect == 0x00) {
 
-						request_disconnect = 0x01;
+					sd_ble_gap_disconnect(m_conn_handle,
+					BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
 
-						NRF_LOG_INFO("Disconnect request");
+					request_disconnect = 0x01;
 
-					}
+					NRF_LOG_INFO("Disconnect request");
 
 				}
 
-			} else {
-
-				disconnect_timeout_count = 0;
-
 			}
+
+		} else {
+
+			disconnect_timeout_count = 0;
 
 		}
 
