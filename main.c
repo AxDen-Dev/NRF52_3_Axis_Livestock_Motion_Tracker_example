@@ -74,7 +74,7 @@
 #define APP_BLE_OBSERVER_PRIO           3                                       /**< Application's BLE observer priority. You shouldn't need to modify this value. */
 #define APP_BLE_CONN_CFG_TAG            1                                       /**< A tag identifying the SoftDevice BLE configuration. */
 
-#define APP_DATA_READY_ADV_INTERVAL                320                                      /**< The advertising interval (in units of 0.625 ms; this value corresponds to 40 ms). */
+#define APP_DATA_READY_ADV_INTERVAL                240                                      /**< The advertising interval (in units of 0.625 ms; this value corresponds to 40 ms). */
 #define APP_IDLE_ADV_INTERVAL                1280                                      /**< The advertising interval (in units of 0.625 ms; this value corresponds to 40 ms). */
 #define APP_ADV_DURATION                BLE_GAP_ADV_TIMEOUT_GENERAL_UNLIMITED   /**< The advertising time-out (in units of seconds). When set to 0, we will never time out. */
 
@@ -583,11 +583,7 @@ static void ble_stack_init(void) {
 	NRF_SDH_BLE_OBSERVER(m_ble_observer, APP_BLE_OBSERVER_PRIO, ble_evt_handler,
 			NULL);
 
-#ifdef NRF528XX
-
 	sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);
-
-#endif
 
 }
 
